@@ -63,6 +63,7 @@ def train(args):
         audio = audio[:-(len(audio) % rate)]
     assert len(audio) % args.upscale == 0
     audio = audio[:rate*10]
+    n_samples = audio.shape[0]
 
     # 1.2 audio preprocessing
     audio = audio.reshape(-1, args.upscale).cuda()
@@ -97,8 +98,9 @@ def train(args):
 
     n_params = sum([p.numel() for p in model.parameters()])
     n_bits = model.module.get_bit_size() # 16 * n_params
-    kbps = n_bits / (len(audio) / rate) / 1000
+    kbps = n_bits / (n_samples / rate) / 1000
     print(f'Model Params: {2*n_params/1e6:.4f}MB (kbps: {kbps:.4f})')
+    print(f'avg bits per param: {n_bits / n_params:.4f}')
 
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
     scheduler = get_cos_warmup_scheduler(optimizer, args.epochs,

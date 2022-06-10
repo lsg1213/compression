@@ -21,11 +21,11 @@ class VINR(nn.Module):
 
         for i in range(n_hidden_layers):
             net.append(get_activation_fn(activation))
-            net.append(QALinear(hidden_dim, hidden_dim, n_bits=8))
+            net.append(QALinear(hidden_dim, hidden_dim, n_bits=n_bits))
             # net.append(nn.Linear(hidden_dim, hidden_dim, bias=bias))
 
-        net.extend([nn.Sequential(get_activation_fn(activation),
-                    QALinear(hidden_dim, out_dim, n_bits=n_bits))])
+        net.extend([get_activation_fn(activation),
+                    QALinear(hidden_dim, out_dim, n_bits=n_bits)])
                     # nn.Linear(hidden_dim, out_dim, bias=bias))])
 
         self.net = nn.Sequential(*net)
@@ -55,20 +55,24 @@ class QALinear(nn.Module):
 
     def forward(self, inputs):
         # quantize
-        min_value = torch.amin(self.weight, self.quant_axis, keepdims=True)
-        max_value = torch.amax(self.weight, self.quant_axis, keepdims=True)
+        r_weight = self.rounding(self.weight, self.quant_axis)
+        weight = (r_weight - self.weight).detach() + self.weight
+
+        bias = (self.rounding(self.bias, -1) - self.bias).detach() + self.bias
+
+        return inputs @ weight + bias
+
+    def rounding(self, inputs, axis):
+        min_value = torch.amin(inputs, axis, keepdims=True)
+        max_value = torch.amax(inputs, axis, keepdims=True)
         scale = (max_value - min_value) / (self.n_bits**2 - 1)
 
-        new_weight = torch.round((self.weight - min_value) / scale)
-        new_weight = new_weight * scale + min_value
-        weight = (new_weight - self.weight).detach() + self.weight
-
-        return inputs @ weight + self.bias
+        return torch.round((inputs - min_value) / scale) * scale + min_value
 
     def get_bit_size(self):
         return 16 * 2 * self.weight.amax(self.quant_axis).numel() \
-            + 16 * self.bias.numel() \
-            + self.weight.numel() * self.n_bits
+            + self.weight.numel() * self.n_bits \
+            + 16 * 2 + self.bias.numel() * self.n_bits
 
 
 class SE(nn.Module):
