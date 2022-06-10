@@ -17,9 +17,9 @@ class PESQ:
 
     def __call__(self, inputs, targets):
         inputs = resample(inputs, self.input_s_rate, self.target_s_rate)
-        inputs = inputs.squeeze().cpu().numpy()
+        inputs = inputs.reshape(-1).cpu().numpy()
         targets = resample(targets, self.input_s_rate, self.target_s_rate)
-        targets = targets.squeeze().cpu().numpy()
+        targets = targets.reshape(-1).cpu().numpy()
 
         return get_metrics(targets, targets, inputs,
                            sample_rate=self.target_s_rate,
