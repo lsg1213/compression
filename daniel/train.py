@@ -5,12 +5,13 @@ import shutil
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.nn.utils.prune as prune
 import torchaudio
 import tqdm
+from sympy import Symbol
+from sympy.solvers import solve
 
-from models import *
 from metrics import *
+from models import *
 
 
 parser = argparse.ArgumentParser()
@@ -28,20 +29,21 @@ parser.add_argument('--overwrite', action='store_true',
 parser.add_argument('--save', action='store_true')
 
 # architecture parameters
-parser.add_argument('--upscale', type=int, default=8)
+parser.add_argument('--upscale', type=int, default=16)
 parser.add_argument('--n_hidden_layers', type=int, default=4)
 parser.add_argument('--hidden_dim', type=int, default=48)
+parser.add_argument('--kbps', type=float, default=None)
 parser.add_argument('--activation', type=str, default='gelu')
 parser.add_argument('--n_bits', type=int, default=8)
 
 # General training setups
-parser.add_argument('--batch_size', type=int, default=30000)
-parser.add_argument('--epochs', type=int, default=1500)
+parser.add_argument('--batch_size', type=int, default=5000)
+parser.add_argument('--epochs', type=int, default=1000)
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--grad_clip', type=float, default=1.)
 
 # evaluation parameters
-parser.add_argument('--eval_freq', type=int, default=250)
+parser.add_argument('--eval_freq', type=int, default=1000)
 
 
 def get_cos_warmup_scheduler(optimizer, total_epoch, warmup_epoch):
@@ -62,7 +64,7 @@ def train(args):
     if len(audio) % rate:
         audio = audio[:-(len(audio) % rate)]
     assert len(audio) % args.upscale == 0
-    audio = audio[:rate*10]
+    audio = audio[:rate*10] # 30]
     n_samples = audio.shape[0]
 
     # 1.2 audio preprocessing
@@ -87,6 +89,17 @@ def train(args):
     metrics = [PSNR(), PESQ(rate)]
     start_epoch = 0
 
+    # 2.1 model width
+    if args.kbps is not None:
+        x = Symbol('x')
+        target_size = 1000 * args.kbps * n_samples / rate
+        in_dim = grids.shape[-1]
+
+        eq = 64 * (args.n_hidden_layers + 2) * (args.n_bits != 16) \
+           + args.n_bits * (in_dim + (in_dim + args.n_hidden_layers * (x+1) + args.upscale + 1) * x) - target_size
+        args.hidden_dim = int(np.round(float(max(solve(eq)))/2)*2)
+        print(f'width: {args.hidden_dim}')
+
     model = VINR(grids.shape[-1], args.upscale,
                  n_hidden_layers=args.n_hidden_layers,
                  hidden_dim=args.hidden_dim, activation=args.activation,
@@ -104,7 +117,7 @@ def train(args):
 
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
     scheduler = get_cos_warmup_scheduler(optimizer, args.epochs,
-                                         int(0.2*args.epochs))
+                                         0) # int(0.2*args.epochs))
     scaler = torch.cuda.amp.GradScaler()
 
     # 3. Train
@@ -151,6 +164,11 @@ def train(args):
 
     if args.save:
         torch.save(checkpoint, f'{args.out_folder}/latest.pth')
+
+    print(f'{kbps:.3f} {scores[0].cpu().numpy():.3f} {scores[1]:.3f} '
+          f'{args.n_hidden_layers} {args.hidden_dim} {args.n_bits} '
+          f'my(2) {args.upscale} {args.lr} cos {args.batch_size} {args.epochs}')
+    # torchaudio.save('recon.wav', model(grids).cpu().reshape(1, -1), rate)
 
 
 @torch.no_grad()
